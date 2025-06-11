@@ -1,18 +1,23 @@
 <?php
 include 'includes/header.php'; // Includes db.php and functions.php
 
-// Fetch ALL customers for the dropdown/search
-$customers_sql = "SELECT id, name FROM customers ORDER BY name ASC";
+// Fetch ALL customers for the search field
+// MODIFIED: Added 'address' to the query
+$customers_sql = "SELECT id, name, address FROM customers ORDER BY name ASC";
 $customers_result = mysqli_query($conn, $customers_sql);
 $all_customers_data_for_js = [];
 while ($row = mysqli_fetch_assoc($customers_result)) {
     $all_customers_data_for_js[] = $row;
 }
 
-// Fetch available items for the item rows
+// Fetch available items for the item search functionality
 $items_sql = "SELECT id, item_name, hsn_sac, price, tax_percentage, unit, stock FROM items WHERE stock > 0 ORDER BY item_name ASC";
 $items_result = mysqli_query($conn, $items_sql);
-// We will build the <option> elements directly in the HTML template below.
+// NEW: Fetch all item data into a separate array for JavaScript
+$all_items_data_for_js = [];
+while ($row = mysqli_fetch_assoc($items_result)) {
+    $all_items_data_for_js[] = $row;
+}
 
 
 // Check if the form has been submitted
@@ -21,15 +26,16 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     // 1. Get main bill details from the form
     $bill_date = $_POST['bill_date'];
     $customer_id = $_POST['customer_id'];
-    $work_order_details = $_POST['work_order_details']; // Note: We should escape this, but skipping for simplicity
+    // MODIFIED: Changed 'work_order_details' to 'customer_address' and added escaping
+    $customer_address = mysqli_real_escape_string($conn, $_POST['customer_address']);
     
     $cgst_rate = 9.00;
     $sgst_rate = 9.00;
 
     // 2. Insert the main bill record to get a new bill ID
-    // We insert it with temporary zeros for totals, and we'll update it later.
-    $bill_sql = "INSERT INTO bills (bill_date, customer_id, work_order_details, cgst_rate, sgst_rate, sub_total, cgst_amount, sgst_amount, grand_total)
-                 VALUES ('$bill_date', $customer_id, '$work_order_details', $cgst_rate, $sgst_rate, 0, 0, 0, 0)";
+    // MODIFIED: SQL query now inserts into 'address' column instead of 'work_order_details'
+    $bill_sql = "INSERT INTO bills (bill_date, customer_id, address, cgst_rate, sgst_rate, sub_total, cgst_amount, sgst_amount, grand_total)
+                 VALUES ('$bill_date', $customer_id, '$customer_address', $cgst_rate, $sgst_rate, 0, 0, 0, 0)";
 
     if (mysqli_query($conn, $bill_sql)) {
         // Get the ID of the bill we just created
@@ -57,6 +63,9 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             $item_detail_sql = "SELECT item_name, hsn_sac, price, tax_percentage, unit FROM items WHERE id = $current_item_id";
             $item_detail_result = mysqli_query($conn, $item_detail_sql);
             $item = mysqli_fetch_assoc($item_detail_result);
+            $safe_item_name = mysqli_real_escape_string($conn, $item['item_name']);
+            $safe_hsn_sac = mysqli_real_escape_string($conn, $item['hsn_sac']);
+            $safe_unit = mysqli_real_escape_string($conn, $item['unit']);
 
             // Calculate amount for this single item
             $amount_for_item = $current_quantity * $item['price'];
@@ -64,7 +73,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
             // Insert this item into the bill_items table, linking it with the bill_id
             $bill_item_sql = "INSERT INTO bill_items (bill_id, item_id, item_name_at_purchase, hsn_sac_at_purchase, quantity, price_at_purchase, tax_percentage_at_purchase, unit_at_purchase, amount)
-                              VALUES ($bill_id, $current_item_id, '{$item['item_name']}', '{$item['hsn_sac']}', $current_quantity, {$item['price']}, {$item['tax_percentage']}, '{$item['unit']}', $amount_for_item)";
+                              VALUES ($bill_id, $current_item_id, '{$safe_item_name}', '{$safe_hsn_sac}', $current_quantity, {$item['price']}, {$item['tax_percentage']}, '{$safe_unit}', $amount_for_item)";
             
             if (!mysqli_query($conn, $bill_item_sql)) {
                 die("Error adding item to bill: " . mysqli_error($conn));
@@ -127,9 +136,10 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                     <small id="selected_customer_text" class="form-text text-muted"></small>
                 </div>
             </div>
+             <!-- MODIFIED: Changed from 'work_order_details' to 'customer_address' -->
              <div class="form-group">
-                <label for="work_order_details">Work Order Details</label>
-                <textarea class="form-control" id="work_order_details" name="work_order_details" rows="2"></textarea>
+                <label for="customer_address">Address</label>
+                <textarea class="form-control" id="customer_address" name="customer_address" rows="3" placeholder="Customer's address will auto-fill here..."></textarea>
             </div>
         </div>
     </div>
@@ -141,7 +151,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             <table class="table table-bordered" id="itemsTable">
                 <thead>
                     <tr>
-                        <th>Item <span class="text-danger">*</span></th>
+                        <th style="width: 35%;">Item <span class="text-danger">*</span></th>
                         <th>HSN/SAC</th>
                         <th>Price</th>
                         <th>Quantity <span class="text-danger">*</span></th>
@@ -196,23 +206,16 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     </div>
 </form>
 
-<!-- This is an HTML template. It's hidden and used as a blueprint to create new item rows with JavaScript. -->
+<!-- MODIFIED: Item row template now uses a search input instead of a select dropdown -->
 <template id="itemRowTemplate">
     <tr>
-        <td>
-            <select class="form-control item-select" name="item_id[]" required>
-                <option value="">Select Item</option>
-                <?php mysqli_data_seek($items_result, 0); // Reset pointer to loop again ?>
-                <?php while ($item = mysqli_fetch_assoc($items_result)): ?>
-                    <option value="<?php echo $item['id']; ?>"
-                            data-price="<?php echo $item['price']; ?>"
-                            data-hsn="<?php echo htmlspecialchars($item['hsn_sac']); ?>"
-                            data-unit="<?php echo htmlspecialchars($item['unit']); ?>"
-                            data-stock="<?php echo $item['stock']; ?>">
-                        <?php echo htmlspecialchars($item['item_name']) . " (Stock: ".$item['stock'].")"; ?>
-                    </option>
-                <?php endwhile; ?>
-            </select>
+        <td class="position-relative"> <!-- Position relative is for the suggestions list -->
+            <!-- The visible search input for the item name -->
+            <input type="text" class="form-control item-search" placeholder="Type to search item..." autocomplete="off">
+            <!-- The hidden input that will hold the selected item ID for submission -->
+            <input type="hidden" class="item-id-hidden" name="item_id[]" required>
+            <!-- Container for search suggestions, will be populated by JavaScript -->
+            <div class="item-suggestions-list list-group position-absolute" style="z-index: 999; width: 100%; display: none;"></div>
         </td>
         <td><input type="text" class="form-control item-hsn" readonly></td>
         <td><input type="number" class="form-control item-price" readonly></td>
@@ -224,8 +227,9 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 </template>
 
 <script>
-    // Pass the PHP customer data to JavaScript
+    // Pass the PHP data to JavaScript
     const allCustomers = <?php echo json_encode($all_customers_data_for_js); ?>;
+    const allItems = <?php echo json_encode($all_items_data_for_js); ?>;
 
     document.addEventListener('DOMContentLoaded', function() {
         const billForm = document.getElementById('billForm');
@@ -236,12 +240,15 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         // --- Customer Search Logic ---
         const customerSearchInput = document.getElementById('customer_search_display');
         const customerIdInput = document.getElementById('customer_id');
+        const customerAddressTextarea = document.getElementById('customer_address'); // Get address textarea
         const customerSuggestionsList = document.getElementById('customer_suggestions_list');
         const selectedCustomerText = document.getElementById('selected_customer_text');
         
         customerSearchInput.addEventListener('input', function() {
             const searchTerm = this.value.toLowerCase().trim();
+            // When user types, clear previous selection and address
             customerIdInput.value = '';
+            customerAddressTextarea.value = '';
             selectedCustomerText.textContent = '';
             customerSuggestionsList.innerHTML = '';
 
@@ -262,6 +269,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                         e.preventDefault();
                         customerSearchInput.value = customer.name;
                         customerIdInput.value = customer.id;
+                        customerAddressTextarea.value = customer.address; // MODIFIED: Auto-fill address
                         selectedCustomerText.textContent = `Selected: ${customer.name}`;
                         customerSuggestionsList.style.display = 'none';
                     });
@@ -272,59 +280,93 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 customerSuggestionsList.style.display = 'none';
             }
         });
-         document.addEventListener('click', function(e) {
-            if (!customerSearchInput.contains(e.target)) {
-                customerSuggestionsList.style.display = 'none';
-            }
-        });
 
 
-        // --- Item Row and Calculation Logic ---
+        // --- Item Row and Calculation Logic (HEAVILY MODIFIED) ---
         
-        // This function adds a new, empty item row to the table
         function addBillItemRow() {
-            // 1. Clone the content of the <template> tag
             const newRow = itemRowTemplate.content.cloneNode(true);
-            // 2. Add event listeners to the new row's inputs and buttons
             bindRowEventListeners(newRow.querySelector('tr'));
-            // 3. Append the new row to the table body
             billItemsBody.appendChild(newRow);
         }
 
-        // This function is called for every new row to make its inputs work
         function bindRowEventListeners(row) {
-            const itemSelect = row.querySelector('.item-select');
+            const searchInput = row.querySelector('.item-search');
+            const idInput = row.querySelector('.item-id-hidden');
+            const suggestionsList = row.querySelector('.item-suggestions-list');
+            const hsnInput = row.querySelector('.item-hsn');
+            const priceInput = row.querySelector('.item-price');
+            const unitInput = row.querySelector('.item-unit');
             const quantityInput = row.querySelector('.item-quantity');
             const removeButton = row.querySelector('.removeItemRow');
 
-            // When an item is selected from the dropdown
-            itemSelect.addEventListener('change', function() {
-                const selectedOption = this.options[this.selectedIndex];
-                row.querySelector('.item-hsn').value = selectedOption.dataset.hsn || '';
-                row.querySelector('.item-price').value = selectedOption.dataset.price || '0.00';
-                row.querySelector('.item-unit').value = selectedOption.dataset.unit || '';
-                quantityInput.max = selectedOption.dataset.stock; // Set max quantity based on stock
+            searchInput.addEventListener('input', function() {
+                const searchTerm = this.value.toLowerCase().trim();
+                suggestionsList.innerHTML = '';
+                
+                // Clear hidden values to ensure a new item must be re-selected
+                idInput.value = '';
+                hsnInput.value = '';
+                priceInput.value = '';
+                unitInput.value = '';
+                quantityInput.max = ''; 
                 calculateRowAmount(row);
+
+                if (searchTerm.length === 0) {
+                    suggestionsList.style.display = 'none';
+                    return;
+                }
+
+                const filteredItems = allItems.filter(item => item.item_name.toLowerCase().includes(searchTerm));
+
+                if (filteredItems.length > 0) {
+                    filteredItems.forEach(item => {
+                        const suggestionItem = document.createElement('a');
+                        suggestionItem.href = '#';
+                        suggestionItem.classList.add('list-group-item', 'list-group-item-action', 'p-2');
+                        suggestionItem.innerHTML = `${item.item_name} <small class="text-muted">(Stock: ${item.stock})</small>`;
+                        
+                        suggestionItem.addEventListener('click', function(e) {
+                            e.preventDefault();
+                            
+                            searchInput.value = item.item_name;
+                            idInput.value = item.id;
+                            hsnInput.value = item.hsn_sac;
+                            priceInput.value = parseFloat(item.price).toFixed(2);
+                            unitInput.value = item.unit;
+                            quantityInput.max = item.stock;
+                            
+                            if (parseInt(quantityInput.value) > parseInt(item.stock)) {
+                                quantityInput.value = item.stock;
+                            }
+                            
+                            suggestionsList.style.display = 'none';
+                            calculateRowAmount(row);
+                        });
+                        
+                        suggestionsList.appendChild(suggestionItem);
+                    });
+                    suggestionsList.style.display = 'block';
+                } else {
+                    suggestionsList.style.display = 'none';
+                }
             });
 
-            // When the quantity is changed
             quantityInput.addEventListener('input', function() {
-                const stock = parseInt(itemSelect.options[itemSelect.selectedIndex].dataset.stock);
-                if(parseInt(this.value) > stock) {
+                const stock = parseInt(this.max);
+                if (stock && parseInt(this.value) > stock) {
                     alert('Quantity cannot exceed available stock: ' + stock);
                     this.value = stock;
                 }
                 calculateRowAmount(row);
             });
 
-            // When the remove button is clicked
             removeButton.addEventListener('click', function() {
                 row.remove();
                 calculateTotals();
             });
         }
 
-        // Calculates the "Amount" for a single row (Price * Quantity)
         function calculateRowAmount(row) {
             const price = parseFloat(row.querySelector('.item-price').value) || 0;
             const quantity = parseInt(row.querySelector('.item-quantity').value) || 0;
@@ -333,7 +375,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             calculateTotals();
         }
 
-        // Calculates all totals for the summary section
         function calculateTotals() {
             let subTotal = 0;
             billItemsBody.querySelectorAll('.item-amount').forEach(input => {
@@ -350,23 +391,31 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             document.getElementById('grandTotalDisplay').textContent = grandTotal.toFixed(2);
         }
         
+        // --- Global Click Listener to hide suggestion boxes ---
+        document.addEventListener('click', function(e) {
+            if (!customerSearchInput.contains(e.target) && !customerSuggestionsList.contains(e.target)) {
+                customerSuggestionsList.style.display = 'none';
+            }
+            document.querySelectorAll('.item-suggestions-list').forEach(list => {
+                const searchInput = list.closest('td').querySelector('.item-search');
+                if (!list.contains(e.target) && !searchInput.contains(e.target)) {
+                    list.style.display = 'none';
+                }
+            });
+        });
+
         // --- Initial Setup ---
-
-        // Add the first item row automatically when the page loads
         addBillItemRow();
-
-        // Listen for clicks on the "Add Item" button
         addItemButton.addEventListener('click', addBillItemRow);
         
-        // Simple form validation before submitting
         billForm.addEventListener('submit', function(event) {
             if (!customerIdInput.value) {
                 alert('Please select a customer.');
-                event.preventDefault(); // Stop the form from submitting
+                event.preventDefault();
             }
             if(billItemsBody.children.length === 0){
                 alert('Please add at least one item.');
-                event.preventDefault(); // Stop the form from submitting
+                event.preventDefault();
             }
         });
     });
