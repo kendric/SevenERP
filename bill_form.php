@@ -1,8 +1,22 @@
 <?php
 include 'includes/header.php'; // Includes db.php and functions.php
 
+// --- NEW LOGIC: Calculate the next bill number for display ---
+$next_bill_no = 1; // Default to 1 for the very first bill
+// We CAST bill_no to a number to ensure we get the true maximum, even if it's stored as text.
+$bill_no_sql = "SELECT MAX(CAST(bill_no AS UNSIGNED)) as last_bill_no FROM bills";
+$bill_no_result = mysqli_query($conn, $bill_no_sql);
+if ($bill_no_result && mysqli_num_rows($bill_no_result) > 0) {
+    $row = mysqli_fetch_assoc($bill_no_result);
+    // If a last bill number exists, the next one is that number + 1
+    if ($row['last_bill_no']) {
+        $next_bill_no = $row['last_bill_no'] + 1;
+    }
+}
+// The variable $next_bill_no is now ready to be used in the form below.
+
+
 // Fetch ALL customers for the search field
-// MODIFIED: Added 'address' to the query
 $customers_sql = "SELECT id, name, address FROM customers ORDER BY name ASC";
 $customers_result = mysqli_query($conn, $customers_sql);
 $all_customers_data_for_js = [];
@@ -13,7 +27,6 @@ while ($row = mysqli_fetch_assoc($customers_result)) {
 // Fetch available items for the item search functionality
 $items_sql = "SELECT id, item_name, hsn_sac, price, tax_percentage, unit, stock FROM items WHERE stock > 0 ORDER BY item_name ASC";
 $items_result = mysqli_query($conn, $items_sql);
-// NEW: Fetch all item data into a separate array for JavaScript
 $all_items_data_for_js = [];
 while ($row = mysqli_fetch_assoc($items_result)) {
     $all_items_data_for_js[] = $row;
@@ -26,14 +39,13 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     // 1. Get main bill details from the form
     $bill_date = $_POST['bill_date'];
     $customer_id = $_POST['customer_id'];
-    // MODIFIED: Changed 'work_order_details' to 'customer_address' and added escaping
     $customer_address = mysqli_real_escape_string($conn, $_POST['customer_address']);
     
     $cgst_rate = 9.00;
     $sgst_rate = 9.00;
 
-    // 2. Insert the main bill record to get a new bill ID
-    // MODIFIED: SQL query now inserts into 'address' column instead of 'work_order_details'
+    // 2. Insert the main bill record to get a new bill ID. 
+    // The bill_no is NOT inserted here; it's determined atomically.
     $bill_sql = "INSERT INTO bills (bill_date, customer_id, address, cgst_rate, sgst_rate, sub_total, cgst_amount, sgst_amount, grand_total)
                  VALUES ('$bill_date', $customer_id, '$customer_address', $cgst_rate, $sgst_rate, 0, 0, 0, 0)";
 
@@ -41,11 +53,11 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         // Get the ID of the bill we just created
         $bill_id = mysqli_insert_id($conn);
 
-        // Set the bill_no to be the same as the ID. This is a common and simple approach.
+        // Set the bill_no to be the same as the ID. This is the source of truth.
         $update_bill_no_sql = "UPDATE bills SET bill_no = '$bill_id' WHERE id = $bill_id";
         mysqli_query($conn, $update_bill_no_sql);
 
-        // 3. Loop through each item submitted and add it to the 'bill_items' table
+        // 3. Loop through each item submitted...
         $total_sub_amount = 0;
         $item_ids = $_POST['item_id'];
         $quantities = $_POST['quantity'];
@@ -54,12 +66,10 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             $current_item_id = $item_ids[$i];
             $current_quantity = $quantities[$i];
 
-            // Skip if the item or quantity is not valid
             if (empty($current_item_id) || $current_quantity <= 0) {
                 continue;
             }
 
-            // Get the item's details (price, name, etc.) at the time of purchase
             $item_detail_sql = "SELECT item_name, hsn_sac, price, tax_percentage, unit FROM items WHERE id = $current_item_id";
             $item_detail_result = mysqli_query($conn, $item_detail_sql);
             $item = mysqli_fetch_assoc($item_detail_result);
@@ -67,11 +77,9 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             $safe_hsn_sac = mysqli_real_escape_string($conn, $item['hsn_sac']);
             $safe_unit = mysqli_real_escape_string($conn, $item['unit']);
 
-            // Calculate amount for this single item
             $amount_for_item = $current_quantity * $item['price'];
             $total_sub_amount += $amount_for_item;
 
-            // Insert this item into the bill_items table, linking it with the bill_id
             $bill_item_sql = "INSERT INTO bill_items (bill_id, item_id, item_name_at_purchase, hsn_sac_at_purchase, quantity, price_at_purchase, tax_percentage_at_purchase, unit_at_purchase, amount)
                               VALUES ($bill_id, $current_item_id, '{$safe_item_name}', '{$safe_hsn_sac}', $current_quantity, {$item['price']}, {$item['tax_percentage']}, '{$safe_unit}', $amount_for_item)";
             
@@ -79,23 +87,21 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 die("Error adding item to bill: " . mysqli_error($conn));
             }
 
-            // Update the stock for the item
             $update_stock_sql = "UPDATE items SET stock = stock - $current_quantity WHERE id = $current_item_id";
             if (!mysqli_query($conn, $update_stock_sql)) {
                  die("Error updating stock: " . mysqli_error($conn));
             }
         }
 
-        // 4. Now that we have the total, calculate taxes and the grand total
+        // 4. Calculate final totals
         $cgst_amount = ($total_sub_amount * $cgst_rate) / 100;
         $sgst_amount = ($total_sub_amount * $sgst_rate) / 100;
         $grand_total = $total_sub_amount + $cgst_amount + $sgst_amount;
 
-        // 5. Update the main bill record with the final calculated totals
+        // 5. Update the main bill record with final totals
         $update_bill_totals_sql = "UPDATE bills SET sub_total = $total_sub_amount, cgst_amount = $cgst_amount, sgst_amount = $sgst_amount, grand_total = $grand_total WHERE id = $bill_id";
 
         if (mysqli_query($conn, $update_bill_totals_sql)) {
-            // Success! Show a message.
             echo "<div class='alert alert-success'>Bill created successfully! Bill Number: $bill_id</div>";
         } else {
             die("Error updating bill totals: " . mysqli_error($conn));
@@ -124,11 +130,17 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         <div class="card-header">Bill Details</div>
         <div class="card-body">
             <div class="form-row">
-                <div class="form-group col-md-4">
+                <!-- MODIFIED: Bill Number field now shows the next prospective number -->
+                <div class="form-group col-md-3">
+                    <label for="bill_no">Bill No.</label>
+                    <input type="text" class="form-control" id="bill_no" value="<?php echo $next_bill_no; ?>" readonly>
+                    <small class="form-text text-muted">This is the prospective bill number.</small>
+                </div>
+                <div class="form-group col-md-3">
                     <label for="bill_date">Date <span class="text-danger">*</span></label>
                     <input type="date" class="form-control" id="bill_date" name="bill_date" value="<?php echo date('Y-m-d'); ?>" required>
                 </div>
-                <div class="form-group col-md-8">
+                <div class="form-group col-md-6">
                     <label for="customer_search_display">Customer <span class="text-danger">*</span></label>
                     <input type="text" class="form-control" id="customer_search_display" placeholder="Type to search customer..." autocomplete="off">
                     <input type="hidden" id="customer_id" name="customer_id" required>
@@ -136,7 +148,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                     <small id="selected_customer_text" class="form-text text-muted"></small>
                 </div>
             </div>
-             <!-- MODIFIED: Changed from 'work_order_details' to 'customer_address' -->
              <div class="form-group">
                 <label for="customer_address">Address</label>
                 <textarea class="form-control" id="customer_address" name="customer_address" rows="3" placeholder="Customer's address will auto-fill here..."></textarea>
@@ -206,15 +217,12 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     </div>
 </form>
 
-<!-- MODIFIED: Item row template now uses a search input instead of a select dropdown -->
+<!-- Item row template -->
 <template id="itemRowTemplate">
     <tr>
-        <td class="position-relative"> <!-- Position relative is for the suggestions list -->
-            <!-- The visible search input for the item name -->
+        <td class="position-relative">
             <input type="text" class="form-control item-search" placeholder="Type to search item..." autocomplete="off">
-            <!-- The hidden input that will hold the selected item ID for submission -->
             <input type="hidden" class="item-id-hidden" name="item_id[]" required>
-            <!-- Container for search suggestions, will be populated by JavaScript -->
             <div class="item-suggestions-list list-group position-absolute" style="z-index: 999; width: 100%; display: none;"></div>
         </td>
         <td><input type="text" class="form-control item-hsn" readonly></td>
@@ -231,6 +239,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     const allCustomers = <?php echo json_encode($all_customers_data_for_js); ?>;
     const allItems = <?php echo json_encode($all_items_data_for_js); ?>;
 
+    // The JavaScript does not need any changes for this feature.
     document.addEventListener('DOMContentLoaded', function() {
         const billForm = document.getElementById('billForm');
         const addItemButton = document.getElementById('addItemRow');
@@ -240,13 +249,12 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         // --- Customer Search Logic ---
         const customerSearchInput = document.getElementById('customer_search_display');
         const customerIdInput = document.getElementById('customer_id');
-        const customerAddressTextarea = document.getElementById('customer_address'); // Get address textarea
+        const customerAddressTextarea = document.getElementById('customer_address');
         const customerSuggestionsList = document.getElementById('customer_suggestions_list');
         const selectedCustomerText = document.getElementById('selected_customer_text');
         
         customerSearchInput.addEventListener('input', function() {
             const searchTerm = this.value.toLowerCase().trim();
-            // When user types, clear previous selection and address
             customerIdInput.value = '';
             customerAddressTextarea.value = '';
             selectedCustomerText.textContent = '';
@@ -269,7 +277,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                         e.preventDefault();
                         customerSearchInput.value = customer.name;
                         customerIdInput.value = customer.id;
-                        customerAddressTextarea.value = customer.address; // MODIFIED: Auto-fill address
+                        customerAddressTextarea.value = customer.address;
                         selectedCustomerText.textContent = `Selected: ${customer.name}`;
                         customerSuggestionsList.style.display = 'none';
                     });
@@ -282,8 +290,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         });
 
 
-        // --- Item Row and Calculation Logic (HEAVILY MODIFIED) ---
-        
+        // --- Item Row and Calculation Logic ---
         function addBillItemRow() {
             const newRow = itemRowTemplate.content.cloneNode(true);
             bindRowEventListeners(newRow.querySelector('tr'));
@@ -303,8 +310,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             searchInput.addEventListener('input', function() {
                 const searchTerm = this.value.toLowerCase().trim();
                 suggestionsList.innerHTML = '';
-                
-                // Clear hidden values to ensure a new item must be re-selected
                 idInput.value = '';
                 hsnInput.value = '';
                 priceInput.value = '';
@@ -328,7 +333,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                         
                         suggestionItem.addEventListener('click', function(e) {
                             e.preventDefault();
-                            
                             searchInput.value = item.item_name;
                             idInput.value = item.id;
                             hsnInput.value = item.hsn_sac;
@@ -391,7 +395,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             document.getElementById('grandTotalDisplay').textContent = grandTotal.toFixed(2);
         }
         
-        // --- Global Click Listener to hide suggestion boxes ---
         document.addEventListener('click', function(e) {
             if (!customerSearchInput.contains(e.target) && !customerSuggestionsList.contains(e.target)) {
                 customerSuggestionsList.style.display = 'none';
@@ -404,7 +407,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             });
         });
 
-        // --- Initial Setup ---
         addBillItemRow();
         addItemButton.addEventListener('click', addBillItemRow);
         
