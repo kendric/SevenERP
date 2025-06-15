@@ -40,7 +40,7 @@ if (isset($_SESSION['message'])) {
     </thead>
     <tbody>
         <?php
-        $sql = "SELECT b.id, b.bill_no, b.bill_date, c.name as customer_name, b.work_order_details, b.grand_total 
+        $sql = "SELECT b.id, b.bill_no, b.bill_date, c.name as customer_name, b.address, b.grand_total 
                 FROM bills b 
                 JOIN customers c ON b.customer_id = c.id 
                 ORDER BY b.bill_date DESC, b.id DESC";
@@ -51,7 +51,7 @@ if (isset($_SESSION['message'])) {
                 echo "<td>" . sanitize_output($row['bill_no'] ? $row['bill_no'] : $row['id']) . "</td>";
                 echo "<td>" . sanitize_output(date("d-m-Y", strtotime($row['bill_date']))) . "</td>";
                 echo "<td>" . sanitize_output($row['customer_name']) . "</td>";
-                echo "<td>" . sanitize_output(substr($row['work_order_details'], 0, 50)) . (strlen($row['work_order_details']) > 50 ? '...' : '') . "</td>";
+                echo "<td>" . sanitize_output(substr($row['address'], 0, 50)) . (strlen($row['address']) > 50 ? '...' : '') . "</td>";
                 echo "<td>" . sanitize_output(number_format($row['grand_total'], 2)) . "</td>";
                 echo "<td>
                         <a href='invoice_view.php?id=" . $row['id'] . "' class='btn btn-sm btn-info'><i class='fas fa-eye'></i> View</a>
