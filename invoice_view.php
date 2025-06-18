@@ -9,6 +9,7 @@ if (!isset($_GET['id']) || empty($_GET['id'])) {
 $bill_id = mysqli_real_escape_string($conn, $_GET['id']);
 
 // Fetch Bill Details
+// The `b.*` already includes the `image_path` column. No change to the query is needed.
 $bill_sql = "SELECT b.*, c.name as customer_name, c.address as customer_address, c.mobile_no as customer_mobile, c.email as customer_email, c.gst_no as customer_gst 
              FROM bills b 
              JOIN customers c ON b.customer_id = c.id 
@@ -82,6 +83,18 @@ mysqli_stmt_close($stmt_items);
                 <?php if (!empty($bill['work_order_details'])): ?>
                     <strong>Work Order:</strong> <?php echo sanitize_output($bill['work_order_details']); ?><br>
                 <?php endif; ?>
+
+                <!-- START: Display Uploaded Image -->
+                <?php if (!empty($bill['image_path']) && file_exists($bill['image_path'])): ?>
+                <div class="mt-3">
+                    <strong>Attached Image:</strong><br>
+                    <a href="<?php echo sanitize_output($bill['image_path']); ?>" target="_blank" title="Click to view full image">
+                        <img src="<?php echo sanitize_output($bill['image_path']); ?>" alt="Attached Bill Image" class="img-thumbnail" style="max-width: 200px; max-height: 200px; margin-top: 5px;">
+                    </a>
+                </div>
+                <?php endif; ?>
+                <!-- END: Display Uploaded Image -->
+
             </div>
         </div>
 
@@ -163,6 +176,8 @@ mysqli_stmt_close($stmt_items);
         }
         .breadcrumb, .card-header button, .footer, .sidebar, .navbar { display: none !important; }
         .card { border: none !important; box-shadow: none !important; }
+        .img-thumbnail { border: 1px solid #ddd !important; padding: 4px; }
+        a[href]:after { content: none !important; } /* Prevents link URL from being printed */
     }
 </style>
 
