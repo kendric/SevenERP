@@ -55,8 +55,8 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         } else {
             // Insert new customer into the database
             // Assuming created_at and updated_at columns exist and should be set
-            $insert_sql = "INSERT INTO customers (name, mobile_no, email, gst_no, address, created_at, updated_at) 
-                           VALUES ('$name_db', '$mobile_db', '$email_db', '$gst_db', '$address_db', NOW(), NOW())";
+            $insert_sql = "INSERT INTO customers (name, mobile_no, email, gst_no, address) 
+                           VALUES ('$name_db', '$mobile_db', '$email_db', '$gst_db', '$address_db')";
             
             if (mysqli_query($conn, $insert_sql)) {
                 $_SESSION['message'] = ['text' => 'Customer added successfully!', 'type' => 'success'];
