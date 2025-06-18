@@ -53,16 +53,39 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     $stock = mysqli_real_escape_string($conn, $_POST['stock']);
 
     if (isset($_GET['update_id'])) { // Update
-        $update_id = mysqli_real_escape_string($conn, $_GET['update_id']);
-        $sql = "UPDATE items SET item_name='$item_name', hsn_sac='$hsn_sac', price='$price', tax_percentage='$tax_percentage', unit='$unit', stock='$stock' WHERE id='$update_id'";
-        if (mysqli_query($conn, $sql)) {
-            $_SESSION['message'] = ['text' => 'Item updated successfully!', 'type' => 'success'];
-        } else {
-            $_SESSION['message'] = ['text' => 'Error updating item: ' . mysqli_error($conn), 'type' => 'danger'];
+    $update_id = (int)$_GET['update_id'];
+    $new_stock = (int)$stock;
+
+    // Get current stock BEFORE updating
+    $current_stock_sql = "SELECT stock FROM items WHERE id = $update_id";
+    $current_stock_result = mysqli_query($conn, $current_stock_sql);
+    $current_stock_row = mysqli_fetch_assoc($current_stock_result);
+    $stock_before = (int)$current_stock_row['stock'];
+
+    $sql = "UPDATE items SET item_name='$item_name', hsn_sac='$hsn_sac', price='$price', tax_percentage='$tax_percentage', unit='$unit', stock='$new_stock' WHERE id='$update_id'";
+    
+    if (mysqli_query($conn, $sql)) {
+        // --- LOG STOCK EDIT ---
+        if ($stock_before != $new_stock) {
+            $quantity_changed = abs($new_stock - $stock_before);
+            $change_type = ($new_stock > $stock_before) ? 'manual_edit_add' : 'manual_edit_remove';
+            $log_sql = "INSERT INTO stock_log (item_id, change_type, quantity_changed, stock_before, stock_after, notes) 
+                        VALUES ($update_id, '$change_type', $quantity_changed, $stock_before, $new_stock, 'Edited from Items page')";
+            mysqli_query($conn, $log_sql);
         }
-    } else { // Insert
+        // --- END LOG ---
+        $_SESSION['message'] = ['text' => 'Item updated successfully!', 'type' => 'success'];
+    } else {
+        $_SESSION['message'] = ['text' => 'Error updating item: ' . mysqli_error($conn), 'type' => 'danger'];
+    }
+} else { // Insert
         $sql = "INSERT INTO items (item_name, hsn_sac, price, tax_percentage, unit, stock) VALUES ('$item_name', '$hsn_sac', '$price', '$tax_percentage', '$unit', '$stock')";
         if (mysqli_query($conn, $sql)) {
+        $new_item_id = mysqli_insert_id($conn);
+        $stock_val = (int)$stock;
+        $log_sql = "INSERT INTO stock_log (item_id, change_type, quantity_changed, stock_before, stock_after, notes) 
+                    VALUES ($new_item_id, 'initial_stock', $stock_val, 0, $stock_val, 'Item created')";
+        mysqli_query($conn, $log_sql);
             $_SESSION['message'] = ['text' => 'Item added successfully!', 'type' => 'success'];
         } else {
             $_SESSION['message'] = ['text' => 'Error adding item: ' . mysqli_error($conn), 'type' => 'danger'];
